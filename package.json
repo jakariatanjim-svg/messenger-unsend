@@ -3,6 +3,6 @@
   "private": true,
   "description": "Remove your own Messenger messages in bulk, locally.",
   "scripts": {
-    "test": "node --test test/core.test.mjs"
+    "test": "node --test test/core.test.mjs test/api.test.mjs"
   }
 }

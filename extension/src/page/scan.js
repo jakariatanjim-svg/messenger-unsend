@@ -1,10 +1,8 @@
 /*
  * Scanner (MAIN world).
  *
- * Finds your own messages inside a date/time window, across one conversation or
- * the whole inbox. Strategy order:
- *   1. the page's local message table (fast, no network, no UI clicking)
- *   2. the rendered conversation DOM (fallback when the table cannot be read)
+ * Walks the conversations, reads messages through the client's own query
+ * builder, and keeps only rows that match the user's window, types and sender.
  *
  * The scanner never deletes anything.
  */
@@ -16,237 +14,252 @@
   if (NS.scan) return;
 
   const CORE = globalThis.MBU_CORE;
+  const THREAD_CONCURRENCY = 4;
+  const E2EE_MAX_PAGES = 12;
 
-  // ------------------------------------------------------------- thread list
+  /**
+   * Encrypted one-to-one chats usually keep an older plain "sibling" thread with
+   * the numeric part of the jid as its key. Both halves have to be scanned.
+   */
+  async function expandEncryptedThreads(threads) {
+    const byKey = new Map(threads.map((thread) => [thread.threadKey, thread]));
+    const out = [];
+
+    for (const thread of threads) {
+      if (!thread.isE2ee) {
+        out.push(thread);
+        continue;
+      }
+
+      if (!thread.chatJid) {
+        thread.chatJid = await NS.api.resolveChatJid(thread).catch(() => null);
+      }
+      out.push(thread);
+
+      const numeric = thread.chatJid ? thread.chatJid.split("@")[0] : null;
+      if (numeric && /^\d+$/.test(numeric) && numeric !== thread.threadKey) {
+        const sibling = byKey.get(numeric);
+        if (sibling) {
+          out.push({ ...sibling, role: "legacy_sibling", name: sibling.name || thread.name });
+        }
+      }
+    }
+
+    return out;
+  }
 
   function parseThreadKeyFromHref(href) {
     const match = /\/t\/([0-9]{1,24})/.exec(href || "");
     return match ? match[1] : null;
   }
 
-  /** Threads visible in the sidebar, in display order. */
-  function threadsFromDom() {
-    const seen = new Map();
-    document.querySelectorAll('a[href*="/t/"]').forEach((anchor) => {
-      const key = parseThreadKeyFromHref(anchor.getAttribute("href"));
-      if (!key || seen.has(key)) return;
-      const label =
-        anchor.getAttribute("aria-label") ||
-        (anchor.querySelector("span") && anchor.querySelector("span").textContent) ||
-        "";
-      seen.set(key, {
-        threadKey: key,
-        name: String(label).trim().slice(0, 80),
-        isE2ee: false,
-        chatJid: null,
-        lastTs: 0,
-        source: "dom",
-      });
-    });
-    return Array.from(seen.values());
-  }
+  // ------------------------------------------------------------------ gather
 
-  /** Give the inbox a chance to load more rows before reading the DOM again. */
-  async function scrollInbox(rounds = 3, onTick) {
-    const container =
-      document.querySelector('[role="grid"]') ||
-      document.querySelector('[aria-label*="Conversations"]') ||
-      document.querySelector('[aria-label*="Chats"]');
-    if (!container) return 0;
-
-    for (let i = 0; i < rounds; i += 1) {
-      container.scrollTop = container.scrollHeight;
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      if (onTick) onTick(threadsFromDom().length);
-    }
-    return threadsFromDom().length;
-  }
-
-  async function listThreads({ scope = "inbox", allowDom = true } = {}) {
+  async function listThreads({ scope = "inbox", loadMore = false } = {}) {
     if (scope === "open") {
       const key = parseThreadKeyFromHref(location.href);
-      return key ? [{ threadKey: key, name: "current conversation", isE2ee: false, source: "url" }] : [];
+      if (!key) return [];
+      const threads = await NS.api.readThreads().catch(() => []);
+      const found = threads.find((thread) => thread.threadKey === key);
+      return [found || { threadKey: key, name: "current conversation", isE2ee: false }];
     }
 
-    let threads = [];
-    try {
-      const rows = await NS.api.readTable("threads", { limit: 4000 });
-      threads = rows.map((row) => CORE.parseThreadRow(row)).filter(Boolean);
-      threads.forEach((thread) => (thread.source = "db"));
-    } catch {
-      threads = [];
+    let threads = await NS.api.readThreads();
+
+    if (loadMore) {
+      const more = await NS.api.loadMoreThreads();
+      if (more && more.added) threads = await NS.api.readThreads();
     }
 
-    if (allowDom) {
-      const seen = new Set(threads.map((t) => t.threadKey));
-      for (const thread of threadsFromDom()) {
-        if (!seen.has(thread.threadKey)) {
-          seen.add(thread.threadKey);
-          threads.push(thread);
+    const supported = threads.filter((thread) => thread.isOneToOne || thread.isGroup);
+    return expandEncryptedThreads(supported);
+  }
+
+  /**
+   * Encrypted threads page their history in from the encrypted message service.
+   * Pull pages until the window is covered, the history ends, or we hit the cap.
+   */
+  function oldestTimestamp(rows) {
+    return rows.reduce((min, row) => {
+      const ts = CORE.normalizeTs(row.timestampMs);
+      return ts && (!min || ts < min) ? ts : min;
+    }, 0);
+  }
+
+  async function extendEncryptedHistory(thread, fromTs, onProgress) {
+    if (!thread.isE2ee) return false;
+    if (!NS.api.e2eeLoadingAvailable()) return false;
+
+    const chatJid = thread.chatJid || thread.threadKey;
+    let cursor = null;
+    let loaded = false;
+
+    for (let page = 0; page < E2EE_MAX_PAGES; page += 1) {
+      const cached = await NS.api.readThreadMessages(thread.threadKey, {
+        descending: true,
+        limit: 400,
+      });
+      const oldest = oldestTimestamp(cached);
+      if (cached.length && oldest && oldest <= fromTs) break;
+
+      const result = await NS.api.loadEncryptedPage(chatJid, cursor);
+      loaded = true;
+      if (onProgress) onProgress({ stage: "e2ee-page", thread: thread.threadKey, page: page + 1 });
+
+      if (!result.hasNext || !result.endCursor) break;
+      cursor = result.endCursor;
+    }
+
+    return loaded;
+  }
+
+  /** Read everything the local table has for one thread inside the window. */
+  async function readThreadWindow(thread, filters, { deep }) {
+    let rows = await NS.api.readThreadMessages(thread.threadKey, {
+      descending: true,
+      fromTs: filters.from,
+      toTs: filters.to,
+      limit: 1200,
+    });
+
+    // The window may sit further back than what the client has cached.
+    if (deep && !rows.length && filters.from != null) {
+      const requested = await NS.api.requestOlderMessages(thread.threadKey, filters.from);
+      if (requested.requested) {
+        const started = Date.now();
+        while (Date.now() - started < 5000) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          rows = await NS.api.readThreadMessages(thread.threadKey, {
+            descending: true,
+            fromTs: filters.from,
+            toTs: filters.to,
+            limit: 1200,
+          });
+          if (rows.length) break;
         }
       }
     }
 
-    return threads;
-  }
-
-  // ------------------------------------------------------------ message rows
-
-  let messageRowsCache = null;
-  let messageRowsAt = 0;
-
-  async function readAllMessages({ maxAgeMs = 60000 } = {}) {
-    if (messageRowsCache && Date.now() - messageRowsAt < maxAgeMs) return messageRowsCache;
-    const rows = await NS.api.readTable("messages", { limit: 40000 });
-    messageRowsCache = rows;
-    messageRowsAt = Date.now();
     return rows;
   }
 
-  function invalidateMessages() {
-    messageRowsCache = null;
-  }
+  // ---------------------------------------------------------------- analysing
 
-  function messagesFromRows(rows, threadKeys, filters, myUserId) {
-    const wanted = threadKeys ? new Set(threadKeys) : null;
+  function toMessages(rows, thread, attachments, filters, myUserId) {
     const out = [];
 
     for (const row of rows) {
-      const message = CORE.parseMessageRow(row);
-      if (!message) continue;
-      if (wanted && message.threadKey && !wanted.has(message.threadKey)) continue;
-      if (message.isUnsent || message.isAdmin) continue;
-      if (!message.ts) continue;
-      if (!CORE.matchesFilters(message, filters, myUserId)) continue;
-      // Plain rows need a thread key for the unsend call. Encrypted rows are
-      // addressed by their own id, so a missing key is fine there.
-      if (!message.threadKey && !CORE.parseE2eeMessageId(message.id)) continue;
-      out.push(message);
+      const messageId = row.messageId;
+      if (!messageId) continue;
+
+      const attached = attachments[messageId] || null;
+      const parsed = CORE.parseMessageRow(
+        attached ? { ...row, attachments: attached } : row,
+        { fallbackThreadKey: thread.threadKey }
+      );
+      if (!parsed) continue;
+      if (parsed.isUnsent || parsed.isAdmin) continue;
+      if (!CORE.matchesFilters(parsed, filters, myUserId)) continue;
+
+      const e2ee = CORE.parseE2eeMessageId(messageId);
+      parsed.protocol = e2ee || thread.isE2ee ? "e2ee" : "plain";
+      parsed.chatJid = e2ee ? e2ee.chatJid : thread.isE2ee ? thread.threadKey : null;
+      parsed.threadName = thread.name || "";
+      parsed.threadKey = thread.threadKey;
+      out.push(parsed);
     }
 
-    out.sort((a, b) => a.ts - b.ts);
     return out;
-  }
-
-  // --------------------------------------------------------------- DOM reader
-
-  function timestampFromNode(node) {
-    const candidates = [
-      node.getAttribute && node.getAttribute("data-timestamp"),
-      node.querySelector && node.querySelector("[data-timestamp]")?.getAttribute("data-timestamp"),
-      node.querySelector && node.querySelector("time")?.getAttribute("datetime"),
-      node.getAttribute && node.getAttribute("aria-label"),
-      node.closest && node.closest("[data-testid]")?.getAttribute("data-timestamp"),
-    ];
-
-    for (const candidate of candidates) {
-      if (!candidate) continue;
-      const numeric = Number(candidate);
-      if (Number.isFinite(numeric) && numeric > 0) return CORE.normalizeTs(numeric);
-      const parsed = Date.parse(candidate);
-      if (Number.isFinite(parsed)) return parsed;
-    }
-    return 0;
-  }
-
-  /**
-   * Fallback: read the conversation that is currently on screen. Slower and
-   * less complete than the database, but it survives schema changes.
-   */
-  function messagesFromDom(filters, myUserId) {
-    const threadKey = parseThreadKeyFromHref(location.href);
-    if (!threadKey) return [];
-
-    const nodes = document.querySelectorAll(
-      '[data-message-id], [data-id^="mid."], [role="row"][data-testid*="message"]'
-    );
-    const out = [];
-    const seen = new Set();
-
-    nodes.forEach((node) => {
-      const id =
-        node.getAttribute("data-message-id") ||
-        node.getAttribute("data-id") ||
-        node.id ||
-        "";
-      if (!id || seen.has(id)) return;
-      seen.add(id);
-
-      const hasVideo = !!node.querySelector("video");
-      const hasImage = !!node.querySelector("img");
-      const text = (node.innerText || "").trim();
-
-      const message = {
-        id,
-        threadKey,
-        ts: timestampFromNode(node),
-        type: hasVideo ? "video" : hasImage ? "photo" : "text",
-        senderId: null,
-        preview: text.replace(/\s+/g, " ").slice(0, 80),
-        isUnsent: /message was deleted|আপনি একটি মেসেজ|removed a message/i.test(text),
-        isAdmin: false,
-        cannotUnsend: false,
-        expired: false,
-      };
-
-      if (!message.ts) return;
-      if (!CORE.matchesFilters(message, filters, myUserId)) return;
-      out.push(message);
-    });
-
-    return out.sort((a, b) => a.ts - b.ts);
   }
 
   // -------------------------------------------------------------------- scan
 
   async function scan({ filters = {}, scope = "inbox", deep = false, onProgress } = {}) {
-    const caps = await NS.api.getCapabilities();
-    const myUserId = caps.identity.userId;
     const report = (stage, detail) => {
       if (typeof onProgress === "function") onProgress({ stage, ...detail });
     };
 
+    const caps = await NS.api.getCapabilities();
+    const myUserId = caps.identity.userId;
     report("capabilities", { caps });
 
-    const threads = await listThreads({ scope, allowDom: scope !== "open" });
+    const threads = await listThreads({ scope, loadMore: deep });
     report("threads", { threadCount: threads.length });
 
-    let messages = [];
-    let source = "db";
+    const messages = [];
+    const seenMessages = new Set();
+    const handledThreads = new Set();
+    const skipped = {};
+    let scanned = 0;
 
-    if (deep && scope === "inbox") {
-      // Give the client a moment to page in more rows before reading the table.
-      await scrollInbox(2, (count) => report("inbox-scroll", { threadCount: count }));
+    async function handleThread(thread) {
+      try {
+        // A conversation whose last activity is older than the window cannot
+        // contain a match, so there is nothing to read.
+        if (filters.from != null && thread.lastActivityMs && thread.lastActivityMs < filters.from) {
+          scanned += 1;
+          report("thread", {
+            done: scanned,
+            total: threads.length,
+            thread: thread.name || thread.threadKey,
+            found: 0,
+            skippedReason: "outside window",
+          });
+          return;
+        }
+
+        if (thread.isE2ee && deep && caps.e2eeHistory && filters.from != null) {
+          await extendEncryptedHistory(thread, filters.from, report);
+        }
+
+        const rows = await readThreadWindow(thread, filters, { deep });
+        const attachments = rows.length ? await NS.api.readAttachments(thread.threadKey) : {};
+        const found = toMessages(rows, thread, attachments, filters, myUserId);
+        const fresh = [];
+        for (const message of found) {
+          if (seenMessages.has(message.id)) continue;
+          seenMessages.add(message.id);
+          fresh.push(message);
+        }
+        messages.push(...fresh);
+        scanned += 1;
+        report("thread", {
+          done: scanned,
+          total: threads.length,
+          thread: thread.name || thread.threadKey,
+          found: fresh.length,
+        });
+      } catch (error) {
+        skipped[thread.threadKey] = String((error && error.message) || error);
+        report("thread-error", {
+          thread: thread.threadKey,
+          error: skipped[thread.threadKey],
+        });
+      } finally {
+        handledThreads.add(thread.threadKey);
+      }
     }
 
-    try {
-      const rows = await readAllMessages();
-      if (!rows.length) throw new Error("message table returned no rows");
-      const threadKeys = scope === "inbox" ? null : threads.map((thread) => thread.threadKey);
-      messages = messagesFromRows(rows, threadKeys, filters, myUserId);
-      report("messages", { rowCount: rows.length, matched: messages.length });
-    } catch (error) {
-      source = "dom";
-      report("db-unavailable", { error: String((error && error.message) || error) });
-      messages = messagesFromDom(filters, myUserId);
-      report("messages", { rowCount: messages.length, matched: messages.length });
-    }
+    const queue = threads.slice();
+    const workers = Array.from({ length: Math.min(THREAD_CONCURRENCY, queue.length) }, async () => {
+      for (;;) {
+        const thread = queue.shift();
+        if (!thread) return;
+        if (handledThreads.has(thread.threadKey)) continue;
+        await handleThread(thread);
+      }
+    });
+    await Promise.all(workers);
 
-    // Attach the thread's protocol so the engine knows which unsend path to use.
-    const threadIndex = new Map(threads.map((thread) => [thread.threadKey, thread]));
-    for (const message of messages) {
-      const thread = threadIndex.get(message.threadKey);
-      const e2ee = CORE.parseE2eeMessageId(message.id);
-      message.protocol = e2ee ? "e2ee" : thread && thread.isE2ee ? "e2ee" : "plain";
-      message.chatJid = e2ee ? e2ee.chatJid : (thread && thread.chatJid) || null;
-      message.threadName = (thread && thread.name) || "";
-    }
+    messages.sort((a, b) => a.ts - b.ts);
+    report("messages", { matched: messages.length, scannedThreads: scanned });
 
     return {
-      source,
+      source: caps.database ? "database" : "unavailable",
       myUserId,
-      scannedThreads: threads.length,
+      scannedThreads: scanned,
       messages,
+      skipped,
       capabilities: caps,
       filters,
     };
@@ -255,9 +268,6 @@
   NS.scan = {
     scan,
     listThreads,
-    threadsFromDom,
-    scrollInbox,
-    messagesFromDom,
-    invalidateMessages,
+    parseThreadKeyFromHref,
   };
 })();
