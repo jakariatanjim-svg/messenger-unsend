@@ -295,25 +295,24 @@
    */
   async function verify(payload = {}) {
     const ids = new Set(payload.ids || []);
-    if (!ids.size) return { checked: 0 };
-    NS.scan.invalidateMessages();
-    const rows = await NS.api.readTable("messages", { limit: 40000 });
-    const byId = new Map();
-    for (const row of rows) {
-      const message = CORE.parseMessageRow(row);
-      if (message) byId.set(message.id, message);
+    if (!ids.size) return { checked: 0, gone: 0, alreadyUnsent: 0, stillThere: [] };
+
+    const byThread = new Map();
+    for (const message of (state.job && state.job.messages) || []) {
+      if (!ids.has(message.id) || !message.threadKey) continue;
+      if (!byThread.has(message.threadKey)) byThread.set(message.threadKey, new Set());
+      byThread.get(message.threadKey).add(message.id);
     }
 
-    const report = { checked: 0, gone: 0, stillThere: [], alreadyUnsent: 0 };
-    for (const id of ids) {
-      report.checked += 1;
-      const row = byId.get(id);
-      if (!row) {
-        report.gone += 1;
-      } else if (row.isUnsent) {
-        report.alreadyUnsent += 1;
-      } else {
-        report.stillThere.push(id);
+    const report = { checked: 0, gone: 0, alreadyUnsent: 0, stillThere: [] };
+    for (const [threadKey, threadIds] of byThread) {
+      const rows = await NS.api.readMessagesByIds(threadKey, threadIds);
+      for (const id of threadIds) {
+        report.checked += 1;
+        const row = rows.get(id);
+        if (!row) report.gone += 1;
+        else if (row.isUnsent === true) report.alreadyUnsent += 1;
+        else report.stillThere.push(id);
       }
     }
     return report;

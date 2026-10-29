@@ -124,8 +124,9 @@
 
     if (asId(firstDefined(row, STICKER_KEYS))) return "sticker";
 
-    const text = String(firstDefined(row, TEXT_KEYS) || "");
-    if (/^https?:\/\/\S+$/.test(text.trim())) return "link";
+    const text = String(firstDefined(row, TEXT_KEYS) || "").trim();
+    if (!text) return "other"; // media-only row whose attachment info is not loaded
+    if (/^https?:\/\/\S+$/.test(text)) return "link";
     return "text";
   }
 

@@ -224,7 +224,16 @@ chrome.runtime.onMessage.addListener((message) => {
       renderMessages();
       updateButtons();
       el("scan-note").textContent = `${state.messages.length} message(s) found`;
-      log("SCAN", `${state.messages.length} message(s) in ${event.scannedThreads} conversation(s) via ${event.source}`);
+      log(
+        "SCAN",
+        `${state.messages.length} message(s) in ${event.scannedThreads} conversation(s) via ${event.source}`
+      );
+      if (!state.messages.length) {
+        log("INFO", "Nothing matched. Widen the time window, tick more message types, or scan again after opening a chat.");
+      }
+      if (event.skipped && Object.keys(event.skipped).length) {
+        log("WARN", `${Object.keys(event.skipped).length} conversation(s) could not be read; see Diagnose.`);
+      }
       document.querySelector('[data-tab="messages"]').click();
       break;
     }

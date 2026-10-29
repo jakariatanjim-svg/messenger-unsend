@@ -65,8 +65,9 @@ Messenger changed.
 
 ## Limits worth knowing
 
-- Scanning works on the conversations Messenger has already loaded. Very old
-  history may need the chat to be opened once so the app fetches it.
+- Scanning reads what Messenger has cached locally and can ask the app to fetch
+  older pages. A conversation that has never been opened may still need one
+  visit before its history is complete.
 - Encrypted conversations use a different internal path from ordinary ones. Both
   are handled, but a Messenger update can break either, so check the first run
   with a small window.
