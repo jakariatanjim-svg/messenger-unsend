@@ -136,7 +136,7 @@ test("formatCsv escapes quotes and commas", () => {
 
 // ------------------------------------------------------------- build integrity
 
-test("manifest is valid and lists the page scripts in dependency order", () => {
+test("manifest is valid and lists the scripts in dependency order", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"));
   assert.equal(manifest.manifest_version, 3);
 
@@ -150,7 +150,11 @@ test("manifest is valid and lists the page scripts in dependency order", () => {
     "src/page/engine.js",
   ]);
 
-  for (const script of mainScript.js) {
+  const uiScript = manifest.content_scripts.find((entry) => !entry.world);
+  assert.ok(uiScript, "the floating panel must run in the isolated world");
+  assert.deepEqual(uiScript.js, ["src/ui/markup.js", "src/ui/app.js", "src/ui/overlay.js"]);
+
+  for (const script of [...mainScript.js, ...uiScript.js]) {
     assert.ok(fs.existsSync(path.join(EXT, script)), `missing ${script}`);
   }
   for (const icon of Object.values(manifest.icons)) {
@@ -158,14 +162,27 @@ test("manifest is valid and lists the page scripts in dependency order", () => {
   }
 });
 
+test("the panel is an in-page overlay, not a browser side panel", () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"));
+  assert.equal(manifest.side_panel, undefined, "side panel must be replaced by the overlay");
+  assert.ok(!(manifest.permissions || []).includes("sidePanel"));
+
+  const overlay = fs.readFileSync(path.join(EXT, "src/ui/overlay.js"), "utf8");
+  assert.match(overlay, /attachShadow/, "the panel must be isolated in a shadow root");
+  assert.match(overlay, /2147483647/, "the panel must sit above the page");
+  assert.match(overlay, /pointermove/, "the panel must be draggable");
+
+  const exposed = manifest.web_accessible_resources || [];
+  const resources = exposed.flatMap((entry) => entry.resources || []);
+  assert.ok(resources.includes("src/ui/panel.css"), "panel.css must be reachable from the page");
+});
+
 test("every script parses and every referenced asset exists", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(EXT, "manifest.json"), "utf8"));
   const files = [
     ...manifest.content_scripts.flatMap((entry) => entry.js),
     manifest.background.service_worker,
-    "src/panel.js",
-    "src/panel.html",
-    "src/panel.css",
+    "src/ui/panel.css",
   ];
 
   for (const file of files) {
@@ -178,9 +195,16 @@ test("every script parses and every referenced asset exists", () => {
     assert.doesNotThrow(() => new vm.Script(source, { filename: file }), `${file} has a syntax error`);
   }
 
-  const html = fs.readFileSync(path.join(EXT, "src/panel.html"), "utf8");
-  assert.ok(html.includes('src="panel.js"'));
-  assert.ok(html.includes('href="panel.css"'));
+  // The panel markup lives in a template string, so check the ids the app binds.
+  const markup = fs.readFileSync(path.join(EXT, "src/ui/markup.js"), "utf8");
+  const app = fs.readFileSync(path.join(EXT, "src/ui/app.js"), "utf8");
+  for (const id of ["btn-scan", "btn-start", "btn-pause", "btn-stop", "messages", "diag-out"]) {
+    assert.ok(markup.includes(`id="${id}"`), `markup is missing #${id}`);
+  }
+  const bound = [...app.matchAll(/el\("([a-z0-9-]+)"\)/g)].map((match) => match[1]);
+  for (const id of new Set(bound)) {
+    assert.ok(markup.includes(`id="${id}"`) || id === "selected-count", `app binds unknown #${id}`);
+  }
 });
 
 test("the engine never merges on its own and keeps the guard rails", () => {

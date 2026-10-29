@@ -40,7 +40,9 @@ with your own logged-in session.
 ## Use
 
 1. Sign in at <https://www.messenger.com> and leave the tab open.
-2. Click the extension icon — the side panel opens.
+2. Click the extension icon, or the red **MBU** bubble in the bottom-right corner.
+   The panel opens floating over the page — drag it by its title bar, or press
+   **–** to minimise it out of the way.
 3. On the **Scan** tab choose the time window and message types, then press
    **Scan**.
 4. On the **Messages** tab check the list. Untick anything you want to keep.
@@ -59,8 +61,7 @@ Messenger changed.
 
 ## Requirements
 
-- A Chromium-based browser with side panel support (Chrome 116 or newer is
-  recommended).
+- A Chromium-based browser (Chrome 116 or newer recommended).
 - A logged-in Messenger session in that browser.
 
 ## Limits worth knowing

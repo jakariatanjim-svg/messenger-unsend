@@ -1,61 +1,36 @@
 /*
  * Service worker.
  *
- * Responsibilities: open the side panel on toolbar click, keep the user's
- * filters between sessions, and relay page events to an open panel.
- *
- * It never talks to the network and never stores session data.
+ * Its only job is the toolbar button: clicking the extension icon asks the panel
+ * in the active tab to open or close. No network access, no stored data.
  */
 
-const KEY_SETTINGS = "mbu_settings";
-
-chrome.runtime.onInstalled.addListener(() => {
-  chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
-});
+const MESSENGER_URL = /^https:\/\/(www\.)?(messenger\.com|facebook\.com\/messages)/;
 
 chrome.action.onClicked.addListener(async (tab) => {
+  if (!tab || !tab.id) return;
+
+  // On any other page there is nothing to toggle, so point the user at Messenger
+  // instead of failing silently.
+  if (!MESSENGER_URL.test(tab.url || "")) {
+    await chrome.tabs
+      .create({ url: "https://www.messenger.com/" })
+      .catch(() => {});
+    return;
+  }
+
   try {
-    if (tab && tab.windowId) await chrome.sidePanel.open({ windowId: tab.windowId });
+    await chrome.tabs.sendMessage(tab.id, { target: "mbu-overlay", kind: "toggle" });
   } catch {
-    /* already open, or unsupported */
+    // The content script is not injected yet (page opened before install):
+    // injecting it now makes the button work on the first click.
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["src/ui/markup.js", "src/ui/app.js", "src/ui/overlay.js"],
+      });
+    } catch {
+      /* the page may forbid injection; the user can reload the tab */
+    }
   }
-});
-
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message) return false;
-
-  // Page events: forward to whatever panel is open, and remember nothing else.
-  if (message.from === "mbu-page") {
-    chrome.runtime.sendMessage({ from: "mbu-relay", payload: message.payload }).catch(() => {});
-    return false;
-  }
-
-  if (message.target === "mbu-bg") {
-    (async () => {
-      try {
-        if (message.kind === "get-settings") {
-          const store = await chrome.storage.local.get(KEY_SETTINGS);
-          sendResponse({ result: store[KEY_SETTINGS] || null });
-        } else if (message.kind === "save-settings") {
-          await chrome.storage.local.set({ [KEY_SETTINGS]: message.payload });
-          sendResponse({ result: true });
-        } else if (message.kind === "active-tab") {
-          const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-          sendResponse({ result: tab ? { id: tab.id, url: tab.url } : null });
-        } else {
-          sendResponse({ error: `unknown command: ${message.kind}` });
-        }
-      } catch (error) {
-        sendResponse({ error: String((error && error.message) || error) });
-      }
-    })();
-    return true;
-  }
-
-  return false;
-});
-
-// Tab open/close nudges the panel so it can show "page not reachable" honestly.
-chrome.tabs.onRemoved.addListener(() => {
-  chrome.runtime.sendMessage({ from: "mbu-relay", payload: { event: "tab-closed" } }).catch(() => {});
 });
