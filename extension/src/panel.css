@@ -1,0 +1,154 @@
+:root {
+  --bg: #0f1115;
+  --card: #171a21;
+  --line: #242936;
+  --text: #e8ecf4;
+  --muted: #96a0b5;
+  --accent: #2f7cf6;
+  --ok: #34c98b;
+  --warn: #f0b429;
+  --err: #ef5350;
+  font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+h1 { font-size: 14px; margin: 0; letter-spacing: 0.2px; }
+h2 { font-size: 12px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+.sub { margin: 2px 0 0; font-size: 11px; color: var(--muted); }
+
+.pill {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.pill--ok { color: var(--ok); border-color: rgba(52, 201, 139, 0.4); }
+.pill--idle { color: var(--muted); }
+.pill--err { color: var(--err); border-color: rgba(239, 83, 80, 0.4); }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 2;
+}
+
+.tab {
+  flex: 1;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 6px 4px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.tab.is-active { color: var(--text); background: var(--card); border-color: var(--line); }
+
+main { padding: 10px; }
+.panel { display: none; }
+.panel.is-active { display: block; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.muted { color: var(--muted); margin: 0 0 8px; }
+.small { font-size: 11.5px; }
+.hint { color: var(--warn); font-size: 11.5px; margin: 8px 0 0; }
+
+.row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+.btn {
+  background: #1f2430;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn:hover { border-color: #3a4457; }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn--primary { background: var(--accent); border-color: var(--accent); }
+.btn--tiny { padding: 3px 8px; font-size: 11px; }
+
+.field { display: block; margin: 8px 0; }
+.field > span { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+
+input, select, textarea {
+  width: 100%;
+  background: #0d1016;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+
+.check { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+.check input { width: auto; }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+
+.list { display: flex; flex-direction: column; gap: 6px; }
+.list--log { max-height: 220px; overflow: auto; font-size: 11.5px; }
+
+.op {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 9px;
+  background: #12161d;
+}
+.op__head { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.op__name { font-family: ui-monospace, monospace; font-size: 11.5px; word-break: break-all; }
+.op__meta { color: var(--muted); font-size: 11px; margin-top: 3px; word-break: break-all; }
+.op--suspect { border-color: rgba(47, 124, 246, 0.55); }
+
+.logline { border-bottom: 1px solid #1c212b; padding: 3px 0; color: var(--muted); }
+.logline b { color: var(--text); font-weight: 600; }
+
+.out {
+  background: #0d1016;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  margin: 10px 0 0;
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+code { font-family: ui-monospace, monospace; color: #9fc4ff; }

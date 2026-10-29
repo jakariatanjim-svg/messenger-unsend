@@ -1,0 +1,49 @@
+{
+  "manifest_version": 3,
+  "name": "Messenger Bulk Unsend",
+  "version": "0.1.0",
+  "description": "Bulk unsend your own Messenger messages by date/time range. Local only. No server, no telemetry.",
+  "minimum_chrome_version": "116",
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": [
+    "https://www.messenger.com/*",
+    "https://www.facebook.com/messages/*",
+    "https://www.facebook.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "action": {
+    "default_title": "Messenger Bulk Unsend"
+  },
+  "side_panel": {
+    "default_path": "src/panel.html"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.messenger.com/*",
+        "https://www.facebook.com/messages/*"
+      ],
+      "js": ["src/hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": false
+    },
+    {
+      "matches": [
+        "https://www.messenger.com/*",
+        "https://www.facebook.com/messages/*"
+      ],
+      "js": ["src/bridge.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": false
+    }
+  ]
+}

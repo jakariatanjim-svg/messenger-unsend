@@ -1,0 +1,9 @@
+{
+  "name": "messenger-bulk-unsend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-only Chrome extension to bulk-unsend your own Messenger messages by date/time range.",
+  "scripts": {
+    "test": "node test/hook.smoke.mjs"
+  }
+}

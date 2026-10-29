@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Messenger Bulk Unsend</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Messenger Bulk Unsend</h1>
+        <p class="sub">Local only &middot; no server &middot; no telemetry</p>
+      </div>
+      <span id="status" class="pill pill--idle">checking&hellip;</span>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab is-active" data-tab="capture" role="tab">1 &middot; Capture</button>
+      <button class="tab" data-tab="replay" role="tab">2 &middot; Replay</button>
+      <button class="tab" data-tab="job" role="tab">3 &middot; Bulk job</button>
+    </nav>
+
+    <main>
+      <!-- ---------------------------------------------------------- capture -->
+      <section id="tab-capture" class="panel is-active">
+        <div class="card">
+          <h2>Step 1 — learn the unsend request</h2>
+          <p class="muted">
+            Open a Messenger chat, hover a message of <strong>your own</strong>, choose
+            <strong>Remove &rarr; Remove for everyone</strong> and confirm. This page then
+            records the exact GraphQL recipe Meta used, so the bulk job can repeat it
+            without clicking the UI. Nothing is deleted by this step except that one
+            message you removed by hand.
+          </p>
+          <div class="row">
+            <button id="btn-refresh-ops" class="btn btn--primary">Refresh captures</button>
+            <button id="btn-clear-ops" class="btn">Clear</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Captured operations</h2>
+          <p class="muted small">
+            Look for an entry whose name or variables mention a message id
+            (<code>message_id</code>, <code>messageId</code>, <code>mid.$</code>).
+            That is the unsend mutation.
+          </p>
+          <div id="ops-list" class="list"></div>
+        </div>
+      </section>
+
+      <!-- ----------------------------------------------------------- replay -->
+      <section id="tab-replay" class="panel">
+        <div class="card">
+          <h2>Step 2 — replay console (recon)</h2>
+          <p class="muted">
+            Send one captured operation with edited variables. Use this to check whether
+            the server still accepts an unsend for an <strong>old</strong> message, and to
+            see the raw response. Requests go from your own logged-in tab.
+          </p>
+          <label class="field">
+            <span>Operation</span>
+            <select id="op-select"></select>
+          </label>
+          <label class="field">
+            <span>Variables (JSON). Only listed keys are sent further.</span>
+            <textarea id="vars-input" rows="10" spellcheck="false"></textarea>
+          </label>
+          <label class="check">
+            <input id="merge-template" type="checkbox" checked />
+            <span>Merge with captured template (recommended)</span>
+          </label>
+          <div class="row">
+            <button id="btn-send" class="btn btn--primary">Send request</button>
+            <button id="btn-ping" class="btn">Ping page</button>
+          </div>
+          <pre id="replay-out" class="out">No request sent yet.</pre>
+        </div>
+      </section>
+
+      <!-- -------------------------------------------------------------- job -->
+      <section id="tab-job" class="panel">
+        <div class="card">
+          <h2>Step 3 — bulk unsend (next stage)</h2>
+          <p class="muted">
+            The scanner and the parallel unsend engine are the next milestone. Filters are
+            shown here so the final shape is locked in early.
+          </p>
+          <div class="grid">
+            <label class="field">
+              <span>From</span>
+              <input id="from" type="datetime-local" />
+            </label>
+            <label class="field">
+              <span>To</span>
+              <input id="to" type="datetime-local" />
+            </label>
+            <label class="field">
+              <span>Types</span>
+              <select id="types" multiple size="6">
+                <option selected>text</option>
+                <option selected>photo</option>
+                <option selected>video</option>
+                <option selected>audio</option>
+                <option selected>file</option>
+                <option selected>sticker</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Scope</span>
+              <select id="scope">
+                <option value="inbox" selected>Whole inbox (all 1:1 + groups)</option>
+                <option value="open">Open conversation only</option>
+                <option value="selected">Selected conversations</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Parallel requests</span>
+              <input id="parallel" type="number" min="1" max="20" value="5" />
+            </label>
+            <label class="field">
+              <span>Max per run (0 = unlimited)</span>
+              <input id="cap" type="number" min="0" value="0" />
+            </label>
+          </div>
+          <div class="row">
+            <button id="btn-scan" class="btn" disabled>Scan (not implemented yet)</button>
+            <button id="btn-run" class="btn" disabled>Unsend (not implemented yet)</button>
+          </div>
+          <p class="hint">
+            Stage 2 adds: cursor-based thread enumeration, per-thread message pagination,
+            sender = me guard, type filter, preview table, then the parallel unsend engine
+            with adaptive backoff and a single reload at the end.
+          </p>
+        </div>
+
+        <div class="card">
+          <h2>Log</h2>
+          <div id="log" class="list list--log"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="panel.js"></script>
+  </body>
+</html>
